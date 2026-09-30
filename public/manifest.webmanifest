@@ -1,0 +1,15 @@
+{
+  "name": "CoTa Warehouse",
+  "short_name": "CoTa",
+  "description": "Find stock, refill open shelves, build pick lists.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f7f8f9",
+  "theme_color": "#ffffff",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "icon-maskable.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" },
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml" }
+  ]
+}
