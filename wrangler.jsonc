@@ -8,9 +8,11 @@
     {
       "binding": "DB",
       "database_name": "cota-warehouse",
-      "database_id": "LOCAL",
+      "database_id": "69372efb-bf9b-4619-9875-2e696ca71c08",
       "migrations_dir": "./migrations"
     }
   ],
+  "routes": [{ "pattern": "cota.nexusautomation.cc", "custom_domain": true }],
+  "workers_dev": true,
   "observability": { "enabled": true }
 }
