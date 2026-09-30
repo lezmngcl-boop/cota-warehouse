@@ -1,9 +1,11 @@
 // Screen logic only. All stock rules live on the server (src/logic.js).
 
 const $ = (sel) => document.querySelector(sel);
+const $$ = (sel) => [...document.querySelectorAll(sel)];
 const esc = (s) =>
   String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+const icon = (id) => `<svg aria-hidden="true"><use href="#i-${id}"/></svg>`;
 
 async function api(path, options) {
   let res;
@@ -17,230 +19,300 @@ async function api(path, options) {
   return data;
 }
 
-const errorBox = (message) => `<div class="note bad" role="alert"><strong>${esc(message)}</strong></div>`;
+const errorNote = (message) => `<div class="note bad" role="alert"><strong>${esc(message)}</strong></div>`;
+const emptyState = (title, text) => `<div class="empty"><b>${esc(title)}</b>${esc(text)}</div>`;
 
-// ---------- tabs ----------
-const tabs = ["search", "refill", "pick"];
-function showTab(name) {
-  for (const t of tabs) {
-    $(`#tab-${t}`).setAttribute("aria-selected", String(t === name));
-    $(`#panel-${t}`).hidden = t !== name;
+// ---------- routing ----------
+const VIEWS = {
+  inventory: { title: "Inventory", sub: "Search stock by SKU or product name" },
+  refill: { title: "Shelf refill", sub: "How many full cases to bring to the open shelf" },
+  picklist: { title: "Pick list", sub: "Enter an order, get the walk sequence" },
+};
+
+function route() {
+  const name = location.hash.replace(/^#\//, "");
+  const view = VIEWS[name] ? name : "inventory";
+  for (const s of $$("section.view")) s.hidden = s.dataset.view !== view;
+  for (const a of $$(".nav a, .tabbar a")) {
+    const on = a.dataset.view === view;
+    a.classList.toggle("active", on);
+    if (on) a.setAttribute("aria-current", "page");
+    else a.removeAttribute("aria-current");
   }
-  try { localStorage.setItem("cota-tab", name); } catch {}
+  $("#page-title").textContent = VIEWS[view].title;
+  $("#page-sub").textContent = VIEWS[view].sub;
+  document.title = `${VIEWS[view].title} · CoTa Warehouse`;
+  window.scrollTo(0, 0);
 }
-for (const t of tabs) $(`#tab-${t}`).addEventListener("click", () => showTab(t));
+window.addEventListener("hashchange", route);
 
-// ---------- product list (shared by Refill + Pick) ----------
+// ---------- connection indicator ----------
+function showConnection() {
+  for (const c of $$(".conn")) c.classList.toggle("off", !navigator.onLine);
+  const label = $(".conn-label");
+  if (label) label.textContent = navigator.onLine ? "Online" : "Offline";
+}
+window.addEventListener("online", showConnection);
+window.addEventListener("offline", showConnection);
+
+// ---------- products (shared by Refill + Pick list) ----------
 let products = [];
-async function loadProducts() {
-  products = (await api("/api/products")).results;
-  const options = products.map((p) => `<option value="${esc(p.sku)}">${esc(p.sku)} · ${esc(p.name)}</option>`).join("");
-  $("#refill-sku").innerHTML = options;
-  // Open on a product that already has shelf figures stored, if there is one.
-  const withShelf = products.find((p) => p.openShelf);
-  if (withShelf) $("#refill-sku").value = withShelf.sku;
-  fillShelfDefaults();
-}
+const bySku = (sku) => products.find((p) => p.sku === sku);
 
-// ---------- Part 1: search ----------
-function productCard(p) {
-  const rows = p.locations
-    .map((l) => `<tr><td class="loc">${esc(l.location)}</td><td class="num">${l.cases}</td><td class="num">${l.units}</td></tr>`)
+// ================= Part 1: inventory =================
+function renderInventory(results, q) {
+  const cases = results.reduce((n, p) => n + p.totalCases, 0);
+  const units = results.reduce((n, p) => n + p.totalUnits, 0);
+  const locs = new Set(results.flatMap((p) => p.locations.map((l) => l.location))).size;
+  $("#inv-stats").innerHTML = [
+    ["Products", results.length],
+    ["Storage locations", locs],
+    ["Cases in storage", cases],
+    ["Units in storage", units],
+  ]
+    .map(([k, v]) => `<div class="stat"><span>${k}</span><b>${v.toLocaleString()}</b></div>`)
     .join("");
-  return `
-    <article class="card">
-      <div class="card-head">
-        <div><h2>${esc(p.sku)}</h2><p class="sub">${esc(p.name)}</p></div>
-        <span class="tag">${p.unitsPerCase} units / case</span>
-      </div>
-      ${p.locations.length ? `
-      <table>
-        <thead><tr><th>Location</th><th class="num">Cases</th><th class="num">Units</th></tr></thead>
-        <tbody>${rows}</tbody>
-        <tfoot><tr><td>Total</td><td class="num">${p.totalCases}</td><td class="num">${p.totalUnits}</td></tr></tfoot>
-      </table>` : `<div class="note warn"><strong>No cases in storage.</strong></div>`}
-    </article>`;
+  $("#inv-count").textContent = q ? `${plural(results.length, "match")} for “${q}”` : `${plural(results.length, "product")}`;
+
+  if (!results.length) {
+    $("#inv-table").innerHTML = emptyState("No matching product", "Check the SKU or try part of the product name.");
+    return;
+  }
+  const rows = results
+    .map((p) => {
+      const chips = p.locations.length
+        ? p.locations
+            .map((l) => `<span class="chip"><span class="loc">${esc(l.location)}</span><b>${plural(l.cases, "case")}</b><small>${l.units} u</small></span>`)
+            .join("")
+        : `<span class="muted">No cases in storage</span>`;
+      return `<tr>
+        <td class="cell-sku mono">${esc(p.sku)}</td>
+        <td class="cell-name product-name">${esc(p.name)}</td>
+        <td class="cell-upc num" data-label="Units/case">${p.unitsPerCase}</td>
+        <td class="cell-locs"><div class="chips">${chips}</div></td>
+        <td class="num strong" data-label="Total cases">${p.totalCases}</td>
+        <td class="num strong" data-label="Total units">${p.totalUnits}</td>
+      </tr>`;
+    })
+    .join("");
+  $("#inv-table").innerHTML = `<table class="table">
+    <thead><tr><th>SKU</th><th>Product</th><th class="num">Units / case</th><th>Locations (cases)</th><th class="num">Total cases</th><th class="num">Total units</th></tr></thead>
+    <tbody>${rows}</tbody>
+  </table>`;
 }
 
 let searchTimer;
 async function runSearch() {
   const q = $("#q").value.trim();
-  const out = $("#search-results");
   try {
     const data = await api(`/api/products?q=${encodeURIComponent(q)}`);
-    out.innerHTML = data.results.length
-      ? data.results.map(productCard).join("")
-      : `<p class="empty">No product matches “${esc(q)}”. Check the SKU or try part of the name.</p>`;
+    renderInventory(data.results, q);
   } catch (e) {
-    out.innerHTML = errorBox(e.message);
+    $("#inv-table").innerHTML = `<div class="panel-body">${errorNote(e.message)}</div>`;
   }
 }
 $("#search-form").addEventListener("submit", (e) => { e.preventDefault(); clearTimeout(searchTimer); runSearch(); });
-$("#q").addEventListener("input", () => { clearTimeout(searchTimer); searchTimer = setTimeout(runSearch, 250); });
+$("#q").addEventListener("input", () => { clearTimeout(searchTimer); searchTimer = setTimeout(runSearch, 200); });
 
-// ---------- Part 2: refill ----------
-function fillShelfDefaults() {
-  const p = products.find((x) => x.sku === $("#refill-sku").value);
+// ================= Part 2: shelf refill =================
+function showStorageFor(p) {
+  $("#refill-storage").innerHTML = p
+    ? `<h3>In storage</h3><div class="chips">${
+        p.locations.map((l) => `<span class="chip"><span class="loc">${esc(l.location)}</span><b>${plural(l.cases, "case")}</b></span>`).join("") ||
+        `<span class="muted">No cases in storage</span>`
+      }</div><p class="muted" style="margin:8px 0 0">${p.unitsPerCase} units per case</p>`
+    : "";
+}
+
+function selectRefillProduct() {
+  const p = bySku($("#refill-sku").value);
   $("#capacity").value = p?.openShelf?.capacity ?? "";
   $("#current").value = p?.openShelf?.current ?? "";
-  $("#refill-result").innerHTML = "";
+  showStorageFor(p);
+  calculateRefill();
 }
-$("#refill-sku").addEventListener("change", fillShelfDefaults);
 
-function pullFromList(pullFrom) {
+function gauge(capacity, current, added) {
+  const pct = (n) => `${Math.max(0, Math.min(100, (n / capacity) * 100))}%`;
+  return `<div class="gauge">
+    <div class="gauge-bar"><i style="width:${pct(current + added)}" class="add"></i><i style="width:${pct(current)}"></i></div>
+    <div class="gauge-legend"><span class="key">On shelf ${current}</span><span class="key add">Added ${added}</span><span>Capacity ${capacity}</span></div>
+  </div>`;
+}
+
+function pullFromText(pullFrom) {
   if (!pullFrom.length) return "";
-  return `<p class="from">Take them from ${pullFrom.map((p) => `<span class="loc">${esc(p.location)}</span> (${plural(p.cases, "case")})`).join(", then ")}.</p>`;
+  return `<p class="from">Take ${pullFrom.length > 1 ? "them" : "all"} from ${pullFrom
+    .map((p) => `<span class="loc">${esc(p.location)}</span> (${plural(p.cases, "case")})`)
+    .join(", then ")}.</p>`;
 }
 
-function renderRefill(d) {
-  const { plan, product, input, pullFrom } = d;
+function renderRefill({ plan, product, input, pullFrom }) {
   const upc = product.unitsPerCase;
-  if (!plan.ok) return errorBox(plan.errors.join(" "));
-  if (plan.casesToPull === 0) return `<div class="card"><p class="big">Shelf is full</p><p class="sub">${input.current} of ${input.capacity} units on the shelf. Nothing to pull.</p></div>`;
+  const { capacity, current } = input;
 
-  const facts = `
-    <div class="facts">
-      <div class="fact"><b>${plan.unitsNeeded}</b><span>units needed</span></div>
-      <div class="fact"><b>${plan.casesToPull}</b><span>full cases</span></div>
-      <div class="fact"><b>${plan.unitsPulled}</b><span>units pulled</span></div>
-    </div>`;
+  if (plan.casesToPull === 0) {
+    return `<p class="headline">Shelf is full</p><p class="muted">${current} of ${capacity} units. Nothing to pull.</p>${gauge(capacity, current, 0)}`;
+  }
 
   if (plan.storageShortfall) {
     const s = plan.storageShortfall;
-    return `<div class="card">
-      <p class="big">Pull ${plural(s.casesAvailable, "case")}: all that storage has</p>
+    return `
+      <p class="headline">Pull ${plural(s.casesAvailable, "case")}: all that is in storage</p>
+      <p class="muted">${esc(product.sku)} · ${esc(product.name)}</p>
       <div class="facts">
         <div class="fact"><b>${plan.unitsNeeded}</b><span>units needed</span></div>
         <div class="fact"><b>${s.casesAvailable}</b><span>cases in storage</span></div>
         <div class="fact"><b>${s.casesAvailable * upc}</b><span>units pulled</span></div>
       </div>
-      <div class="note bad">
-        <strong>Not enough ${esc(product.sku)} in storage to fill the shelf.</strong>
-        <p>Filling needs ${plural(plan.casesToPull, "case")}; storage has ${s.casesAvailable}. The shelf will reach ${s.shelfAfter} of ${input.capacity} units.
-        Tell your supervisor so a restock can be ordered.</p>
-      </div>
-      ${pullFromList(pullFrom)}
-    </div>`;
+      ${gauge(capacity, current, s.casesAvailable * upc)}
+      ${pullFromText(pullFrom)}
+      <div class="note bad"><strong>Not enough stock to fill the shelf.</strong>
+        <p>Filling needs ${plural(plan.casesToPull, "case")}; storage has ${s.casesAvailable}. The shelf will reach ${s.shelfAfter} of ${capacity} units. Tell your supervisor so a restock can be ordered.</p>
+      </div>`;
   }
 
-  let consequence = `<div class="note ok"><strong>Exact fit.</strong><p>${plural(plan.casesToPull, "case")} × ${upc} = ${plan.unitsPulled} units fills the shelf to ${input.capacity} with nothing left over.</p></div>`;
+  let consequence = `<div class="note ok"><strong>Exact fit.</strong><p>${plural(plan.casesToPull, "case")} × ${upc} = ${plan.unitsPulled} units fills the shelf to ${capacity}. Nothing left over.</p></div>`;
   if (plan.leftoverUnits) {
     const alt = plan.alternative;
     consequence = `
       <div class="note warn">
-        <strong>${plural(plan.leftoverUnits, "unit")} will not fit on the shelf.</strong>
-        <p>Storage only moves full cases of ${upc}. ${plural(plan.casesToPull, "case")} = ${plan.unitsPulled} units, but the shelf only has room for ${plan.unitsNeeded}.
-        The last case is opened and ${plural(plan.leftoverUnits, "unit")} stay in it.</p>
-        <p>That open case cannot go back into storage as a full case. Put it in the overflow spot next to the shelf, label it
-        “${esc(product.sku)} · ${plan.leftoverUnits} units”, and use it first at the next refill, so the stock count stays right.</p>
+        <strong>${plural(plan.leftoverUnits, "unit")} will not fit on the shelf</strong>
+        <p>Storage only moves full cases of ${upc}. ${plural(plan.casesToPull, "case")} = ${plan.unitsPulled} units, but the shelf only has room for ${plan.unitsNeeded}, so the last case is opened and ${plural(plan.leftoverUnits, "unit")} stay in it.</p>
+        <p>An open case cannot go back into storage as a full case. Put it in the overflow spot by the shelf, label it “${esc(product.sku)} · ${plan.leftoverUnits} units”, and use it first at the next refill so the stock count stays right.</p>
       </div>
-      ${alt.casesToPull > 0 ? `<div class="note">
-        <strong>If an open case is not allowed:</strong>
-        <p>Pull ${plural(alt.casesToPull, "case")} (${alt.unitsPulled} units) instead. The shelf reaches ${alt.shelfAfter} of ${input.capacity}, ${plural(alt.unitsShort, "unit")} short, and nothing is left over.</p>
+      ${alt.casesToPull > 0 ? `<div class="note"><strong>If an open case is not allowed</strong>
+        <p>Pull ${plural(alt.casesToPull, "case")} (${alt.unitsPulled} units) instead. The shelf reaches ${alt.shelfAfter} of ${capacity}, ${plural(alt.unitsShort, "unit")} short, with nothing left over.</p>
       </div>` : ""}`;
   }
 
-  return `<div class="card">
-    <p class="big">Pull ${plural(plan.casesToPull, "case")} of ${esc(product.sku)}</p>
-    <p class="sub">${esc(product.name)} · shelf ${input.current} of ${input.capacity} units now</p>
-    ${facts}
-    ${pullFromList(pullFrom)}
-    ${consequence}
-  </div>`;
+  return `
+    <p class="headline">Pull ${plural(plan.casesToPull, "case")} of ${esc(product.sku)}</p>
+    <p class="muted">${esc(product.name)} · ${current} of ${capacity} units on the shelf now</p>
+    <div class="facts">
+      <div class="fact"><b>${plan.unitsNeeded}</b><span>units needed</span></div>
+      <div class="fact"><b>${plan.casesToPull}</b><span>full cases</span></div>
+      <div class="fact"><b>${plan.unitsPulled}</b><span>units pulled</span></div>
+    </div>
+    ${gauge(capacity, current, plan.unitsNeeded)}
+    ${pullFromText(pullFrom)}
+    ${consequence}`;
 }
 
-$("#refill-form").addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const params = new URLSearchParams({
-    sku: $("#refill-sku").value,
-    capacity: $("#capacity").value,
-    current: $("#current").value,
-  });
-  try {
-    $("#refill-result").innerHTML = renderRefill(await api(`/api/replenish?${params}`));
-  } catch (err) {
-    $("#refill-result").innerHTML = errorBox(err.message);
+let refillTimer;
+async function calculateRefill() {
+  const out = $("#refill-result");
+  const cap = $("#capacity").value.trim();
+  const cur = $("#current").value.trim();
+  if (!cap || !cur) {
+    out.innerHTML = emptyState("Enter the shelf figures", "Shelf capacity and units on the shelf now.");
+    return;
   }
+  const params = new URLSearchParams({ sku: $("#refill-sku").value, capacity: cap, current: cur });
+  try {
+    out.innerHTML = renderRefill(await api(`/api/replenish?${params}`));
+  } catch (err) {
+    out.innerHTML = errorNote(err.message);
+  }
+}
+$("#refill-sku").addEventListener("change", selectRefillProduct);
+$("#refill-form").addEventListener("input", (e) => {
+  if (e.target.id === "refill-sku") return;
+  clearTimeout(refillTimer);
+  refillTimer = setTimeout(calculateRefill, 250);
 });
+$("#refill-form").addEventListener("submit", (e) => { e.preventDefault(); calculateRefill(); });
 
-// ---------- Part 3: pick list ----------
+// ================= Part 3: pick list =================
 function addLine(sku = "", cases = "") {
   const div = document.createElement("div");
   div.className = "pick-line";
   div.innerHTML = `
-    <select aria-label="Product" required>
-      <option value="">Choose…</option>
+    <select aria-label="SKU" required>
+      <option value="">Choose SKU</option>
       ${products.map((p) => `<option value="${esc(p.sku)}"${p.sku === sku ? " selected" : ""}>${esc(p.sku)}</option>`).join("")}
     </select>
-    <input type="number" aria-label="Cases" inputmode="numeric" min="1" step="1" required value="${esc(cases)}">
-    <button type="button" class="icon" aria-label="Remove line"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></button>`;
+    <input type="number" aria-label="Cases" inputmode="numeric" min="1" step="1" required value="${esc(cases)}" placeholder="0">
+    <button type="button" class="btn icon" aria-label="Remove line">${icon("x")}</button>`;
   div.querySelector("button").addEventListener("click", () => {
     div.remove();
     if (!$("#pick-lines").children.length) addLine();
   });
   $("#pick-lines").append(div);
 }
+
+function resetPickResult() {
+  $("#pick-result").innerHTML = emptyState("No pick list yet", "Add the order lines and press Build pick list.");
+  $("#print").hidden = true;
+}
+
 $("#add-line").addEventListener("click", () => addLine());
 $("#load-example").addEventListener("click", () => {
   $("#pick-lines").innerHTML = "";
   addLine("TURTLE-01", 3);
   addLine("SHARK-02", 2);
   addLine("ALIEN-04", 1);
-  $("#pick-result").innerHTML = "";
+  resetPickResult();
 });
+$("#print").addEventListener("click", () => window.print());
 
 function renderPickList(d) {
   const status = d.complete
-    ? `<div class="note ok"><strong>Ready to pick: ${plural(d.totalCases, "case")}, ${d.totalUnits} units.</strong></div>`
+    ? `<div class="note ok"><strong>Ready to pick</strong><p>${plural(d.totalCases, "case")} · ${d.totalUnits} units · ${plural(d.picks.length, "stop")}</p></div>`
     : `<div class="note bad" role="alert">
-        <strong>This order cannot be filled in full. Do not ship it as complete.</strong>
+        <strong>This order cannot be filled in full</strong>
         <ul>${d.problems.map((p) => `<li>${esc(p.message)}</li>`).join("")}</ul>
-        ${d.picks.length ? "<p>The list below picks what is in stock. Check with your supervisor before sending a partial order.</p>" : ""}
+        ${d.picks.length ? "<p>The route below picks what is in stock. Do not ship the order as complete; check with your supervisor first.</p>" : ""}
       </div>`;
-  if (!d.picks.length) return `<div class="card">${status}</div>`;
+  if (!d.picks.length) return status;
 
-  const shortBySku = Object.fromEntries(d.lines.filter((l) => l.short > 0).map((l) => [l.sku, l]));
+  const short = Object.fromEntries(d.lines.filter((l) => l.short > 0).map((l) => [l.sku, l]));
   const items = d.picks
     .map((p) => `
-      <li class="${shortBySku[p.sku] ? "short" : ""}">
+      <li class="${short[p.sku] ? "short" : ""}">
         <span class="seq">${p.sequence}</span>
         <span class="what"><span class="loc">${esc(p.location)}</span><span class="name">${esc(p.sku)} · ${esc(p.name)}</span></span>
-        <span class="qty">${shortBySku[p.sku] ? `${p.cases} of ${shortBySku[p.sku].requested} cases` : plural(p.cases, "case")}<small>${p.units} units</small></span>
+        <span class="qty">${short[p.sku] ? `${p.cases} of ${short[p.sku].requested} cases` : plural(p.cases, "case")}<small>${p.units} units</small></span>
       </li>`)
     .join("");
-  const route = [...new Set(d.picks.map((p) => p.location.split("-")[0]))].join(" → ");
-  return `<div class="card">
-    ${status}
-    <ol class="picks">${items}</ol>
-    <p class="route">Walk: ${esc(route)}, one way, no backtracking.</p>
-  </div>`;
+  const aisles = [...new Set(d.picks.map((p) => p.location.split("-")[0]))].join(" → ");
+  return `${status}
+    <ol class="route-list">${items}</ol>
+    <div class="route-foot"><span>Walk <b>${esc(aisles)}</b>, one way, no backtracking</span><span><b>${d.totalCases}</b> cases · <b>${d.totalUnits}</b> units</span></div>`;
 }
 
 $("#pick-form").addEventListener("submit", async (e) => {
   e.preventDefault();
-  const lines = [...document.querySelectorAll(".pick-line")].map((row) => ({
+  const lines = $$(".pick-line").map((row) => ({
     sku: row.querySelector("select").value,
     cases: Number(row.querySelector("input").value),
   }));
   try {
-    $("#pick-result").innerHTML = renderPickList(
-      await api("/api/picklist", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ lines }) })
-    );
+    const d = await api("/api/picklist", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ lines }) });
+    $("#pick-result").innerHTML = renderPickList(d);
+    $("#print").hidden = !d.picks.length;
+    if (matchMedia("(max-width: 900px)").matches) $("#pick-result").scrollIntoView({ behavior: "smooth", block: "start" });
   } catch (err) {
-    $("#pick-result").innerHTML = errorBox(err.message);
+    $("#pick-result").innerHTML = errorNote(err.message);
+    $("#print").hidden = true;
   }
 });
 
 // ---------- start ----------
 (async () => {
-  let saved;
-  try { saved = localStorage.getItem("cota-tab"); } catch {}
-  showTab(tabs.includes(saved) ? saved : "search");
+  route();
+  showConnection();
+  resetPickResult();
   try {
-    await loadProducts();
+    products = (await api("/api/products")).results;
+    renderInventory(products, "");
+    $("#refill-sku").innerHTML = products.map((p) => `<option value="${esc(p.sku)}">${esc(p.sku)} · ${esc(p.name)}</option>`).join("");
+    // Open on a product that already has shelf figures stored, if there is one.
+    const withShelf = products.find((p) => p.openShelf);
+    if (withShelf) $("#refill-sku").value = withShelf.sku;
+    selectRefillProduct();
     addLine();
-    runSearch();
   } catch (e) {
-    $("#search-results").innerHTML = errorBox(e.message);
+    $("#inv-table").innerHTML = `<div class="panel-body">${errorNote(e.message)}</div>`;
   }
 })();
