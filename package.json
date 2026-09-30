@@ -1,0 +1,16 @@
+{
+  "name": "cota-warehouse",
+  "version": "1.0.0",
+  "description": "CoTa warehouse: inventory search, open-shelf refill, pick lists",
+  "scripts": {
+    "dev": "wrangler d1 migrations apply cota-warehouse --local && wrangler dev",
+    "test": "node --test test/*.test.js",
+    "deploy": "wrangler d1 migrations apply cota-warehouse --remote && wrangler deploy"
+  },
+  "license": "UNLICENSED",
+  "type": "module",
+  "devDependencies": {
+    "wrangler": "^4.145.0"
+  },
+  "private": true
+}

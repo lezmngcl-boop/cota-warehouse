@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#ffffff">
+  <title>CoTa Warehouse</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="top">
+    <div class="top-inner">
+      <h1 class="brand">CoTa <span>Warehouse</span></h1>
+      <nav class="tabs" role="tablist">
+        <button role="tab" id="tab-search" aria-controls="panel-search" aria-selected="true">Find stock</button>
+        <button role="tab" id="tab-refill" aria-controls="panel-refill" aria-selected="false">Refill shelf</button>
+        <button role="tab" id="tab-pick" aria-controls="panel-pick" aria-selected="false">Pick list</button>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+    <!-- Part 1: search -->
+    <section id="panel-search" role="tabpanel" aria-labelledby="tab-search">
+      <form id="search-form" class="stack" autocomplete="off">
+        <label for="q">SKU or product name</label>
+        <div class="row">
+          <input id="q" name="q" type="search" placeholder="e.g. TURTLE-01 or turtle" enterkeyhint="search">
+          <button type="submit">Search</button>
+        </div>
+      </form>
+      <div id="search-results" aria-live="polite"></div>
+    </section>
+
+    <!-- Part 2: open-shelf replenishment -->
+    <section id="panel-refill" role="tabpanel" aria-labelledby="tab-refill" hidden>
+      <form id="refill-form" class="stack" autocomplete="off">
+        <label for="refill-sku">Product</label>
+        <select id="refill-sku" name="sku" required></select>
+        <div class="grid2">
+          <div class="stack">
+            <label for="capacity">Shelf holds (units)</label>
+            <input id="capacity" name="capacity" type="number" inputmode="numeric" min="1" step="1" required>
+          </div>
+          <div class="stack">
+            <label for="current">On shelf now (units)</label>
+            <input id="current" name="current" type="number" inputmode="numeric" min="0" step="1" required>
+          </div>
+        </div>
+        <button type="submit" class="primary">Work out what to pull</button>
+      </form>
+      <div id="refill-result" aria-live="polite"></div>
+    </section>
+
+    <!-- Part 3: pick list -->
+    <section id="panel-pick" role="tabpanel" aria-labelledby="tab-pick" hidden>
+      <form id="pick-form" class="stack" autocomplete="off">
+        <div class="pick-head"><span>Product</span><span>Cases</span><span></span></div>
+        <div id="pick-lines" class="stack"></div>
+        <div class="row">
+          <button type="button" id="add-line">+ Add line</button>
+          <button type="button" id="load-example" class="link">Load example order</button>
+        </div>
+        <button type="submit" class="primary">Build pick list</button>
+      </form>
+      <div id="pick-result" aria-live="polite"></div>
+    </section>
+  </main>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>
